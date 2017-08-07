@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">AnnoyingStockApp</string>
+    <string name="edit_message">Enter a message</string>
+    <string name="button_save">Save</string>
+    <string name="button_delete">Delete</string>
+    <string name="button_add_stock">Add Stock</string>
+</resources>
