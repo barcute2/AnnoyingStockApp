@@ -22,10 +22,14 @@ import org.xmlpull.v1.XmlPullParser;
 
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.BufferedReader;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.lang.Object.*;
 import java.net.URL;
+import java.net.HttpURLConnection;
 import java.text.DecimalFormat;
 import java.text.NumberFormat;
 import java.util.HashMap;
@@ -34,6 +38,8 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import yahoofinance.YahooFinance;
 
 public class MainActivity extends AppCompatActivity {
     public final static String MAP = "com.example.annoyingstockapp.MAP";
@@ -229,21 +235,27 @@ public class MainActivity extends AppCompatActivity {
 
     private class RetrieveStockPrice extends AsyncTask<TreeMap<String, Stock>, Void, TreeMap<String, Stock>> {
 
-        private final String firstPart = "https://query.yahooapis.com/v1/public/yql?q=select%20*%20from%20yahoo.finance.quote%20where%20symbol%20in%20(%22";
-        private final String secondPart = "%22)&diagnostics=true&env=store%3A%2F%2Fdatatables.org%2Falltableswithkeys";
-
         protected TreeMap<String, Stock> doInBackground(TreeMap<String, Stock>... st){
             executing.set(true);
-            String yqlURL = buildyqlURL();
-            try {
-                XmlPullParser parser = Xml.newPullParser();
-                parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false);
-                parser.setInput(new InputStreamReader(new URL(yqlURL).openStream()));
-                parser.nextTag();
-                parseDocument(parser);
-            }catch(Exception e){
-                e.printStackTrace();
+            Iterator it = stocks.entrySet().iterator();
+            String[] symbols = new String[stocks.size()];
+            int symbolCounter = 0;
+            while (it.hasNext()){
+                TreeMap.Entry pair = (TreeMap.Entry) it.next();
+                Stock stock = (Stock) pair.getValue();
+                symbols[symbolCounter] = stock.getStockName();
+                symbolCounter++;
             }
+            try {
+                java.util.Map<String, yahoofinance.Stock> yahooStocks = YahooFinance.get(symbols);
+                for(String stockName: symbols){
+                    yahoofinance.Stock yahooStock = yahooStocks.get(stockName.toUpperCase());
+                    if(yahooStock != null) {
+                        updateStockValue(yahooStock.getQuote().getPrice().floatValue(), stocks.get(stockName));
+                    }
+                }
+                storeMap();
+            } catch (IOException ex) {}
             return st[0];
         }
 
@@ -271,101 +283,21 @@ public class MainActivity extends AppCompatActivity {
             executing.set(false);
         }
 
-        private final void parseDocument(XmlPullParser parser) throws Exception{
-            Iterator it = stocks.entrySet().iterator();
-            while((parser.next() != XmlPullParser.END_TAG) && (it.hasNext())){
-                if(parser.getEventType() != XmlPullParser.START_TAG){
-                    parser.next();
-                    continue;
-                }
-                String name = parser.getName();
-                if(name.equals("results")) {
-                    while(parser.next() != XmlPullParser.END_TAG && it.hasNext()){
-                        if(parser.getEventType() != XmlPullParser.START_TAG){
-                            continue;
-                        }
-                        name = parser.getName();
-                        TreeMap.Entry pair = (TreeMap.Entry) it.next();
-                        Stock stock = (Stock) pair.getValue();
-                        updateStockValue(parser, stock);
-                    }
-                }
-                skip(parser);
-            }
-            storeMap();
-        }
-
-        private boolean updateStockValue(XmlPullParser parser, Stock stock) throws Exception{
+        private boolean updateStockValue(Float lastTradePriceOnly, Stock stock){
             boolean outOfInterval = false;
-            parser.require(XmlPullParser.START_TAG, null, "quote");
-            float lastTradePriceOnly = 0;
-            while (parser.next() != XmlPullParser.END_TAG) {
-                if (parser.getEventType() != XmlPullParser.START_TAG) {
-                    continue;
+            if(lastTradePriceOnly > 0.01){
+                if(stock.getHighValue() < lastTradePriceOnly){
+                    outOfInterval = true;
+                    stock.setColor(Color.GREEN);
+                }else if (stock.getLowValue() > lastTradePriceOnly){
+                    outOfInterval = true;
+                    stock.setColor(Color.RED);
+                }else{
+                    stock.setColor(android.R.drawable.btn_default);
                 }
-                String name = parser.getName();
-                if (name.equals("LastTradePriceOnly")) {
-                    lastTradePriceOnly = getPrice(parser);
-                    if(lastTradePriceOnly > 0.01){
-                        if(stock.getHighValue() < lastTradePriceOnly){
-                            outOfInterval = true;
-                            stock.setColor(Color.GREEN);
-                        }else if (stock.getLowValue() > lastTradePriceOnly){
-                            outOfInterval = true;
-                            stock.setColor(Color.RED);
-                        }else{
-                            stock.setColor(android.R.drawable.btn_default);
-                        }
-                        stock.setActualValue(lastTradePriceOnly);
-                    }
-                    parser.next();
-                }
-                skip(parser);
+                stock.setActualValue(lastTradePriceOnly);
             }
             return outOfInterval;
-        }
-
-        private float getPrice(XmlPullParser parser) throws Exception{
-            parser.require(XmlPullParser.START_TAG, null, "LastTradePriceOnly");
-            float price = 0;
-            if(parser.next() == XmlPullParser.TEXT){
-                price = Float.parseFloat(parser.getText());
-                parser.nextTag();
-                return price;
-            }
-            return 0;
-        }
-
-        private void skip(XmlPullParser parser) throws Exception {
-            int depth = 1;
-            while (depth != 0) {
-                switch (parser.next()) {
-                    case XmlPullParser.END_TAG:
-                        depth--;
-                        break;
-                    case XmlPullParser.START_TAG:
-                        depth++;
-                        break;
-                }
-            }
-        }
-
-        private final String buildyqlURL(){
-            StringBuilder sb = new StringBuilder();
-            sb.append(firstPart);
-            Iterator it = stocks.entrySet().iterator();
-            TreeMap.Entry pair;
-            if(it.hasNext()){
-                pair = (TreeMap.Entry) it.next();
-                sb.append(pair.getKey());
-                while (it.hasNext()) {
-                    pair = (TreeMap.Entry) it.next();
-                    sb.append("%22%2C%22");
-                    sb.append(pair.getKey());
-                }
-            }
-            sb.append(secondPart);
-            return sb.toString();
         }
     }
 }
